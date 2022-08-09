@@ -1,8 +1,10 @@
 let bucket = new Set()
+// 使用硬编码的effect不利于解耦
+let activeEffect
 const obj = { text: 'hello world' }
 const data = new Proxy(obj, {
     get(target, key) {
-        bucket.add(effect)
+        bucket.add(activeEffect)
         return target[key]
     },
     set(target, key, value) {
@@ -12,11 +14,14 @@ const data = new Proxy(obj, {
     }
 })
 
-function effect() {
-    document.querySelector("#app").innerHTML = data.text
+const effect = (fn) => {
+    activeEffect = fn
+    fn()
 }
 
-effect()
+effect(() => {
+    document.querySelector("#app").innerHTML = data.text
+})
 
 setTimeout(() => {
     data.text = "hello vue"

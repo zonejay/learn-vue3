@@ -4,6 +4,7 @@
 // 这个问题
 let bucket = new WeakMap()
 let activeEffect
+// 副作用函数栈，栈顶存放当前的副作用函数
 const effectStack = []
 const obj = { text: 'hello world', show:true, count:0 }
 function cleanup(effectFn) {
@@ -57,9 +58,12 @@ const effect = (fn) => {
     const effectFn = () => {
         cleanup(effectFn)
         activeEffect = effectFn
+        // fn是真正的副作用函数，在执行之前压入栈顶
         effectStack.push(effectFn)
         fn()
+        // 执行完成之后推出当前副作用
         effectStack.pop()
+        // activeEffect始终指向栈顶
         activeEffect = effectStack[effectStack.length - 1]
     }
     // deps数组缓存bucket中的set

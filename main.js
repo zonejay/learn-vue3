@@ -4,7 +4,8 @@
 // 这个问题
 let bucket = new WeakMap()
 let activeEffect
-const obj = { text: 'hello world', show:true }
+const effectStack = []
+const obj = { text: 'hello world', show:true, count:0 }
 function cleanup(effectFn) {
     for (let i = 0; i < effectFn.deps.length; i++) {
         const deps = effectFn.deps[i];
@@ -56,7 +57,10 @@ const effect = (fn) => {
     const effectFn = () => {
         cleanup(effectFn)
         activeEffect = effectFn
+        effectStack.push(effectFn)
         fn()
+        effectStack.pop()
+        activeEffect = effectStack[effectStack.length - 1]
     }
     // deps数组缓存bucket中的set
     effectFn.deps = []
@@ -67,8 +71,13 @@ effect(() => {
     // 在副作用函数中，初始show为true，当show为false的时候再去改变text的值
     // 会重新触发副作用函数。可以执行清理操作避免分支切换的时候执行多余的副作用
     // 函数，因为每次执行副作用函数都会重新出发track，可以在track函数中清除依赖
+    // document.querySelector("#app").innerHTML = data.show ? data.text:'none'
+    effect(() => {
+        console.log('nesting effect');
+       data.show = false
+    })
+    document.querySelector("#app").innerHTML = data.text
     console.log('execed');
-    document.querySelector("#app").innerHTML = data.show ? data.text:'none'
 })
 
 setTimeout(() => {

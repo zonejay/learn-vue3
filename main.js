@@ -15,6 +15,7 @@ function cleanup(effectFn) {
     effectFn.deps.length = 0
 }
 function track(target,key) {
+    if(!activeEffect) return
     let depsMap
     if(bucket.has(target)) {
         depsMap = bucket.get(target)
@@ -28,6 +29,7 @@ function track(target,key) {
         depsMap.set(key, (deps = new Set()))
     }
     deps.add(activeEffect)
+    console.log(activeEffect);
     activeEffect.deps.push(deps)
 }
 function trigger(target,key) {
@@ -37,13 +39,19 @@ function trigger(target,key) {
             let deps = depsMap.get(key)
             // set的forEach如果同一个元素在删除的同时被加进set，不会被标记为已被访问
             // 会造成死循环，可以使用一个临时的set
-            const cacheDeps = new Set(deps)
-            cacheDeps.forEach(fn => fn())
+            const effectToRun = new Set()
+            deps && deps.forEach(fn => {
+                if(fn !== activeEffect) {
+                    effectToRun.add(fn)
+                }
+            })
+            effectToRun.forEach(fn => fn())
         }
     }
 }
 const data = new Proxy(obj, {
     get(target, key) {
+        console.log('track');
         track(target,key)
         return target[key]
     },
@@ -75,16 +83,22 @@ effect(() => {
     // 在副作用函数中，初始show为true，当show为false的时候再去改变text的值
     // 会重新触发副作用函数。可以执行清理操作避免分支切换的时候执行多余的副作用
     // 函数，因为每次执行副作用函数都会重新出发track，可以在track函数中清除依赖
-    // document.querySelector("#app").innerHTML = data.show ? data.text:'none'
-    effect(() => {
-        console.log('nesting effect');
-       data.show = false
-    })
-    document.querySelector("#app").innerHTML = data.text
-    console.log('execed');
+    document.querySelector("#app").innerHTML = data.count
+    // effect(() => {
+    //     console.log('nesting effect');
+    //    data.show = false
+    // })
+    // document.querySelector("#app").innerHTML = data.text
+    // console.log('execed');
+    // 自增操作同样会引起无限递归循环，解决方法是在trigger函数中判断要执行的副作用
+    // 函数是不是acitveEffect
+    // data.count++
 })
 
 setTimeout(() => {
-    data.show = false
-    data.text = "hello vue"
+    // data.show = false
+    // data.text = "hello vue"
+    data.count++
+    // console.log(data.show);
+    // console.log(data.count);
 }, 1000);

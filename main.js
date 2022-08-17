@@ -29,7 +29,7 @@ function track(target,key) {
         depsMap.set(key, (deps = new Set()))
     }
     deps.add(activeEffect)
-    console.log(activeEffect);
+    // console.log(activeEffect);
     activeEffect.deps.push(deps)
 }
 function trigger(target,key) {
@@ -45,13 +45,24 @@ function trigger(target,key) {
                     effectToRun.add(fn)
                 }
             })
-            effectToRun.forEach(fn => fn())
+            effectToRun.forEach(fn => {
+                if(fn.config) {
+                    if(fn.config.schedule) {
+                        // setTimeout(fn)
+                        fn.config.schedule(fn)
+                    } else {
+                        fn()
+                    }
+                } else {
+                    fn()
+                }
+            })
         }
     }
 }
 const data = new Proxy(obj, {
     get(target, key) {
-        console.log('track');
+        // console.log('track');
         track(target,key)
         return target[key]
     },
@@ -62,7 +73,7 @@ const data = new Proxy(obj, {
     }
 })
 
-const effect = (fn) => {
+const effect = (fn, config = {}) => {
     const effectFn = () => {
         cleanup(effectFn)
         activeEffect = effectFn
@@ -76,6 +87,8 @@ const effect = (fn) => {
     }
     // deps数组缓存bucket中的set
     effectFn.deps = []
+    console.log(config);
+    effectFn.config = config
     effectFn()
 }
 
@@ -83,7 +96,7 @@ effect(() => {
     // 在副作用函数中，初始show为true，当show为false的时候再去改变text的值
     // 会重新触发副作用函数。可以执行清理操作避免分支切换的时候执行多余的副作用
     // 函数，因为每次执行副作用函数都会重新出发track，可以在track函数中清除依赖
-    document.querySelector("#app").innerHTML = data.count
+    // document.querySelector("#app").innerHTML = data.count
     // effect(() => {
     //     console.log('nesting effect');
     //    data.show = false
@@ -93,12 +106,19 @@ effect(() => {
     // 自增操作同样会引起无限递归循环，解决方法是在trigger函数中判断要执行的副作用
     // 函数是不是acitveEffect
     // data.count++
+    console.log(data.count);
+},{
+    schedule:(fn) => {
+        setTimeout(fn)
+    },
+    // lazy:true
 })
-
-setTimeout(() => {
-    // data.show = false
-    // data.text = "hello vue"
-    data.count++
-    // console.log(data.show);
-    // console.log(data.count);
-}, 1000);
+data.count++
+console.log('test');
+// setTimeout(() => {
+//     // data.show = false
+//     // data.text = "hello vue"
+//     data.count++
+//     // console.log(data.show);
+//     // console.log(data.count);
+// }, 1000);

@@ -7,6 +7,22 @@ let activeEffect
 // 副作用函数栈，栈顶存放当前的副作用函数
 const effectStack = []
 const obj = { text: 'hello world', show:true, count:0 }
+const jobQueue = new Set()
+const p = Promise.resolve()
+
+// 刷新标识
+let isFlushing = false
+function flushJob() {
+    if(isFlushing) return
+    // 标识设为true 表示正在刷新
+    isFlushing = true
+    p.then(() => {
+        jobQueue.forEach(fn => fn())
+    }).finally(() => {
+        // 结束后重置
+        isFlushing = false
+    })
+}
 function cleanup(effectFn) {
     for (let i = 0; i < effectFn.deps.length; i++) {
         const deps = effectFn.deps[i];
@@ -46,13 +62,9 @@ function trigger(target,key) {
                 }
             })
             effectToRun.forEach(fn => {
-                if(fn.config) {
-                    if(fn.config.schedule) {
-                        // setTimeout(fn)
-                        fn.config.schedule(fn)
-                    } else {
-                        fn()
-                    }
+                if(fn.config.schedule) {
+                    // setTimeout(fn)
+                    fn.config.schedule(fn)
                 } else {
                     fn()
                 }
@@ -82,6 +94,7 @@ const effect = (fn, config = {}) => {
         fn()
         // 执行完成之后推出当前副作用
         effectStack.pop()
+
         // activeEffect始终指向栈顶
         activeEffect = effectStack[effectStack.length - 1]
     }
@@ -108,11 +121,17 @@ effect(() => {
     // data.count++
     console.log(data.count);
 },{
-    schedule:(fn) => {
-        setTimeout(fn)
-    },
+    // 调度器，决定何时运行副作用函数
+    // schedule(fn){
+    //     setTimeout(fn)
+    // },
+    schedule(fn) {
+        jobQueue.add(fn)
+        flushJob()
+    }
     // lazy:true
 })
+data.count++
 data.count++
 console.log('test');
 // setTimeout(() => {

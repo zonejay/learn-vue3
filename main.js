@@ -6,7 +6,7 @@ let bucket = new WeakMap()
 let activeEffect
 // 副作用函数栈，栈顶存放当前的副作用函数
 const effectStack = []
-const obj = { text: 'hello world', show: true, count: 0, firstName: 'john', lastName: 'smith' }
+const obj = { text: 'hello world', show: true, count: 0, firstName: 'john', lastName: 'smith', foo:1 }
 const jobQueue = new Set()
 const p = Promise.resolve()
 
@@ -63,8 +63,8 @@ function trigger(target, key) {
                 }
             })
             effectToRun.forEach(fn => {
-                if (fn.config.schedule) {
-                    fn.config.schedule(fn)
+                if (fn.config.scheduler) {
+                    fn.config.scheduler(fn)
                 } else {
                     fn()
                 }
@@ -126,10 +126,10 @@ const effect = (fn, config = {}) => {
 //     console.log(data.count);
 // }, {
 //     // 调度器，决定何时运行副作用函数
-//     // schedule(fn){
+//     // scheduler(fn){
 //     //     setTimeout(fn)
 //     // },
-//     // schedule(fn) {
+//     // scheduler(fn) {
 //     //     jobQueue.add(fn)
 //     //     flushJob()
 //     // }
@@ -140,9 +140,9 @@ function computed(getter) {
     let value
     let dirty = true
     const effectFn = effect(getter, {
-        lazy: true, schedule() {
-            console.log('change dirty');
+        lazy: true, scheduler() {
             dirty = true
+            trigger(obj, 'value')
         }
     })
     const obj = {
@@ -151,24 +151,60 @@ function computed(getter) {
                 value = effectFn()
                 dirty = false
             }
+            track(obj, 'value')
             return value
         }
     }
     return obj
 }
-data.count++
-data.count++
+function traverse(value, seen = new Set()) {
+    // 检查是否读取过
+   if(typeof value !== 'object' || value === null || seen.has(value))  return
+    // 没有则添加
+    seen.add(value)
+    // 使用for in遍历对象的每一个值，递归处理
+    for (const key in value) {
+        traverse(value[key], seen)
+    }
+    return value
+}
+
+function watch(source, cb) {
+    // 使用getter，可以指定当对应的数据发生变化时才执行回调
+    let getter
+    if(typeof source === 'function'){
+        getter = source
+    } else {
+        getter = () => traverse(source)
+    }
+    let oldValue, newValue
+    const effectFn = effect(() => getter(),{
+        lazy:true,
+        scheduler() {
+            newValue = effectFn()
+            cb(newValue, oldValue)
+            oldValue = newValue
+        }
+    })
+    oldValue = effectFn()
+}
 
 const fullname = computed(() => {
     console.log('computed effect');
     return data.firstName + ' ' + data.lastName
 })
 console.log(fullname.value);
-// console.log(fullname.value);
-// data.firstName = 'sb'
-// effect(() => {
-//     document.querySelector("#app").innerHTML = fullname.value
-// })
-// setTimeout(() => {
-//     data.firstName = 'haruhi'
-// }, 1000);
+effect(() => {
+    document.querySelector("#app").innerHTML = fullname.value
+})
+setTimeout(() => {
+    data.firstName = 'haruhi'
+}, 1000);
+
+watch(() => data.foo,(newValue, oldValue) => {
+    console.log(newValue, oldValue);
+})
+
+setTimeout(() => {
+    data.foo++
+}, 2000);

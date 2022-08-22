@@ -6,7 +6,7 @@ let bucket = new WeakMap()
 let activeEffect
 // 副作用函数栈，栈顶存放当前的副作用函数
 const effectStack = []
-const obj = { text: 'hello world', show: true, count: 0, firstName: 'john', lastName: 'smith', foo:1 }
+const obj = { text: 'hello world', show: true, count: 0, firstName: 'john', lastName: 'smith', foo: 1 }
 const jobQueue = new Set()
 const p = Promise.resolve()
 
@@ -159,7 +159,7 @@ function computed(getter) {
 }
 function traverse(value, seen = new Set()) {
     // 检查是否读取过
-   if(typeof value !== 'object' || value === null || seen.has(value))  return
+    if (typeof value !== 'object' || value === null || seen.has(value)) return
     // 没有则添加
     seen.add(value)
     // 使用for in遍历对象的每一个值，递归处理
@@ -169,24 +169,44 @@ function traverse(value, seen = new Set()) {
     return value
 }
 
-function watch(source, cb) {
+function watch(source, cb, options = {}) {
     // 使用getter，可以指定当对应的数据发生变化时才执行回调
     let getter
-    if(typeof source === 'function'){
+    if (typeof source === 'function') {
         getter = source
     } else {
         getter = () => traverse(source)
     }
+    const job = () => {
+        if(cleanup) {
+            cleanup()
+        }
+        newValue = effectFn()
+        cb(newValue, oldValue, onInvalidate)
+        oldValue = newValue
+    }
     let oldValue, newValue
-    const effectFn = effect(() => getter(),{
-        lazy:true,
-        scheduler() {
-            newValue = effectFn()
-            cb(newValue, oldValue)
-            oldValue = newValue
+    // 用来存储用户注册的过期回调 
+    let cleanup
+    function onInvalidate(fn) {
+        cleanup = fn
+    }
+    const effectFn = effect(() => getter(), {
+        lazy: true,
+        scheduler: () => {
+            if(options.flush === 'post') {
+                const p = Promise.resolve()
+                p.then(job)
+            } else {
+                job()
+            }
         }
     })
-    oldValue = effectFn()
+    if (options.immediate) {
+        job()
+    } else {
+        oldValue = effectFn()
+    }
 }
 
 const fullname = computed(() => {
@@ -197,14 +217,39 @@ console.log(fullname.value);
 effect(() => {
     document.querySelector("#app").innerHTML = fullname.value
 })
-setTimeout(() => {
-    data.firstName = 'haruhi'
-}, 1000);
+// setTimeout(() => {
+//     data.firstName = 'haruhi'
+// }, 1000);
 
-watch(() => data.foo,(newValue, oldValue) => {
-    console.log(newValue, oldValue);
+// watch(() => data.foo, (newValue, oldValue) => {
+//     console.log(newValue, oldValue);
+// })
+
+// setTimeout(() => {
+//     data.foo++
+// }, 2000);
+
+// 立即执行watch
+// watch(() => data.foo, () => {
+//     console.log('foo changed');
+// }, {
+//     // immediate: true
+//     flush: 'post' // 'pre' 'sync' 组件更新前/后
+// })
+// data.foo++
+let finalData
+watch(() => data.foo, async (newValue, oldValue, onInvalidate) => {
+    let expired = false
+    onInvalidate(() => {
+        expired = true
+    })
+    
+    const res = await fetch('https://api.coindesk.com/v1/bpi/currentprice.json')
+    if(!expired) {
+        finalData = res
+    }
 })
-
+data.foo++
 setTimeout(() => {
-    data.foo++
-}, 2000);
+    data.foo = 3
+}, 200);

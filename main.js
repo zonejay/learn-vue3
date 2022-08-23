@@ -7,6 +7,10 @@ let activeEffect
 // 副作用函数栈，栈顶存放当前的副作用函数
 const effectStack = []
 const ITERATE_KEY = Symbol()
+const TriggerType = {
+    SET: 'SET',
+    ADD: 'ADD'
+}
 const obj = { 
     text: 'hello world', 
     show: true, 
@@ -60,11 +64,10 @@ function track(target, key) {
     // console.log(activeEffect);
     activeEffect.deps.push(deps)
 }
-function trigger(target, key) {
+function trigger(target, key, type) {
     if (bucket.has(target)) {
         let depsMap = bucket.get(target)
         let effects = depsMap.get(key)
-        const iterateEffects = depsMap.get(ITERATE_KEY)
         // set的forEach如果同一个元素在删除的同时被加进set，不会被标记为已被访问
         // 会造成死循环，可以使用一个临时的set
         const effectToRun = new Set()
@@ -73,12 +76,14 @@ function trigger(target, key) {
                 effectToRun.add(fn)
             }
         })
-        
-        iterateEffects && iterateEffects.forEach(fn => {
-            if (fn !== activeEffect) {
-                effectToRun.add(fn)
-            }
-        })
+        if(type === TriggerType.ADD)  {
+            const iterateEffects = depsMap.get(ITERATE_KEY)
+            iterateEffects && iterateEffects.forEach(fn => {
+                if (fn !== activeEffect) {
+                    effectToRun.add(fn)
+                }
+            })
+        }
         
         effectToRun.forEach(fn => {
             if (fn.config.scheduler) {
@@ -96,8 +101,6 @@ const data = new Proxy(obj, {
         return Reflect.get(target, key, receiver)
     },
     has(target,key) {
-        console.log(key);
-        console.log('has');
         track(target, key)
         return Reflect.has(target, key)
     },
@@ -106,8 +109,10 @@ const data = new Proxy(obj, {
         return Reflect.ownKeys(target)
     },
     set(target, key, value, receiver) {
+        // 添加属性还是修改属性
+        const type = Object.prototype.hasOwnProperty.call(target,key) ? TriggerType.SET: TriggerType.ADD
         const res = Reflect.set(target,key,value,receiver)
-        trigger(target, key)
+        trigger(target, key, type)
         return res
     }
 })
@@ -291,4 +296,4 @@ effect(() => {
     }
 })
 
-data.sb = 'sb'
+data.foo = 2

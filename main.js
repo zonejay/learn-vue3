@@ -6,7 +6,19 @@ let bucket = new WeakMap()
 let activeEffect
 // 副作用函数栈，栈顶存放当前的副作用函数
 const effectStack = []
-const obj = { text: 'hello world', show: true, count: 0, firstName: 'john', lastName: 'smith', foo: 1 }
+const ITERATE_KEY = Symbol()
+const obj = { 
+    text: 'hello world', 
+    show: true, 
+    count: 0, 
+    firstName: 'john', 
+    lastName: 'smith', 
+    foo: 1, 
+    get bar() {
+        console.log(this);
+        return this.foo
+    } 
+}
 const jobQueue = new Set()
 const p = Promise.resolve()
 
@@ -51,37 +63,52 @@ function track(target, key) {
 function trigger(target, key) {
     if (bucket.has(target)) {
         let depsMap = bucket.get(target)
-        if (depsMap.has(key)) {
-            console.log('trigger');
-            let deps = depsMap.get(key)
-            // set的forEach如果同一个元素在删除的同时被加进set，不会被标记为已被访问
-            // 会造成死循环，可以使用一个临时的set
-            const effectToRun = new Set()
-            deps && deps.forEach(fn => {
-                if (fn !== activeEffect) {
-                    effectToRun.add(fn)
-                }
-            })
-            effectToRun.forEach(fn => {
-                if (fn.config.scheduler) {
-                    fn.config.scheduler(fn)
-                } else {
-                    fn()
-                }
-            })
-        }
+        let effects = depsMap.get(key)
+        const iterateEffects = depsMap.get(ITERATE_KEY)
+        // set的forEach如果同一个元素在删除的同时被加进set，不会被标记为已被访问
+        // 会造成死循环，可以使用一个临时的set
+        const effectToRun = new Set()
+        effects && effects.forEach(fn => {
+            if (fn !== activeEffect) {
+                effectToRun.add(fn)
+            }
+        })
+        
+        iterateEffects && iterateEffects.forEach(fn => {
+            if (fn !== activeEffect) {
+                effectToRun.add(fn)
+            }
+        })
+        
+        effectToRun.forEach(fn => {
+            if (fn.config.scheduler) {
+                fn.config.scheduler(fn)
+            } else {
+                fn()
+            }
+        })
     }
 }
 const data = new Proxy(obj, {
-    get(target, key) {
+    get(target, key, receiver) {
         // console.log('track');
         track(target, key)
-        return target[key]
+        return Reflect.get(target, key, receiver)
     },
-    set(target, key, value) {
-        target[key] = value
+    has(target,key) {
+        console.log(key);
+        console.log('has');
+        track(target, key)
+        return Reflect.has(target, key)
+    },
+    ownKeys(target) {
+        track(target, ITERATE_KEY)
+        return Reflect.ownKeys(target)
+    },
+    set(target, key, value, receiver) {
+        const res = Reflect.set(target,key,value,receiver)
         trigger(target, key)
-        return true
+        return res
     }
 })
 
@@ -101,7 +128,6 @@ const effect = (fn, config = {}) => {
     }
     // deps数组缓存bucket中的set
     effectFn.deps = []
-    console.log(config);
     effectFn.config = config
     if (!config.lazy) {
         effectFn()
@@ -209,14 +235,14 @@ function watch(source, cb, options = {}) {
     }
 }
 
-const fullname = computed(() => {
-    console.log('computed effect');
-    return data.firstName + ' ' + data.lastName
-})
-console.log(fullname.value);
-effect(() => {
-    document.querySelector("#app").innerHTML = fullname.value
-})
+// const fullname = computed(() => {
+//     console.log('computed effect');
+//     return data.firstName + ' ' + data.lastName
+// })
+// console.log(fullname.value);
+// effect(() => {
+//     document.querySelector("#app").innerHTML = fullname.value
+// })
 // setTimeout(() => {
 //     data.firstName = 'haruhi'
 // }, 1000);
@@ -237,19 +263,32 @@ effect(() => {
 //     flush: 'post' // 'pre' 'sync' 组件更新前/后
 // })
 // data.foo++
-let finalData
-watch(() => data.foo, async (newValue, oldValue, onInvalidate) => {
-    let expired = false
-    onInvalidate(() => {
-        expired = true
-    })
+// let finalData
+// watch(() => data.foo, async (newValue, oldValue, onInvalidate) => {
+//     let expired = false
+//     onInvalidate(() => {
+//         expired = true
+//     })
     
-    const res = await fetch('https://api.coindesk.com/v1/bpi/currentprice.json')
-    if(!expired) {
-        finalData = res
+//     const res = await fetch('https://api.coindesk.com/v1/bpi/currentprice.json')
+//     if(!expired) {
+//         finalData = res
+//     }
+// })
+// data.foo++
+// setTimeout(() => {
+//     data.foo = 3
+// }, 200);
+
+// in的副作用函数
+// effect(() => {
+//     'foo' in data
+// })
+
+effect(() => {
+    for (const key in data) {
+        console.log(key);
     }
 })
-data.foo++
-setTimeout(() => {
-    data.foo = 3
-}, 200);
+
+data.sb = 'sb'

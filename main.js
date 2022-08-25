@@ -11,17 +11,17 @@ const TriggerType = {
     SET: 'SET',
     ADD: 'ADD'
 }
-const obj = { 
-    text: 'hello world', 
-    show: true, 
-    count: 0, 
-    firstName: 'john', 
-    lastName: 'smith', 
-    foo: 1, 
+const obj = {
+    text: 'hello world',
+    show: true,
+    count: 0,
+    firstName: 'john',
+    lastName: 'smith',
+    foo: 1,
     get bar() {
         console.log(this);
         return this.foo
-    } 
+    }
 }
 const jobQueue = new Set()
 const p = Promise.resolve()
@@ -76,7 +76,7 @@ function trigger(target, key, type) {
                 effectToRun.add(fn)
             }
         })
-        if(type === TriggerType.ADD)  {
+        if (type === TriggerType.ADD || type === 'DELETE') {
             const iterateEffects = depsMap.get(ITERATE_KEY)
             iterateEffects && iterateEffects.forEach(fn => {
                 if (fn !== activeEffect) {
@@ -84,7 +84,7 @@ function trigger(target, key, type) {
                 }
             })
         }
-        
+
         effectToRun.forEach(fn => {
             if (fn.config.scheduler) {
                 fn.config.scheduler(fn)
@@ -94,28 +94,70 @@ function trigger(target, key, type) {
         })
     }
 }
-const data = new Proxy(obj, {
-    get(target, key, receiver) {
-        // console.log('track');
-        track(target, key)
-        return Reflect.get(target, key, receiver)
-    },
-    has(target,key) {
-        track(target, key)
-        return Reflect.has(target, key)
-    },
-    ownKeys(target) {
-        track(target, ITERATE_KEY)
-        return Reflect.ownKeys(target)
-    },
-    set(target, key, value, receiver) {
-        // 添加属性还是修改属性
-        const type = Object.prototype.hasOwnProperty.call(target,key) ? TriggerType.SET: TriggerType.ADD
-        const res = Reflect.set(target,key,value,receiver)
-        trigger(target, key, type)
-        return res
-    }
-})
+function createReactive(obj, isShallow = false) {
+    return new Proxy(obj, {
+        get(target, key, receiver) {
+            // console.log('track');
+            if (key === 'raw') {
+                return target
+            }
+            track(target, key)
+
+            // 得到原始数据
+            const res = Reflect.get(target, key, receiver)
+            if (!isShallow && typeof res === 'object' && res !== null) {
+                // 将结果包装成响应式数据
+                return reactive(res)
+            }
+            return res
+        },
+        has(target, key) {
+            track(target, key)
+            return Reflect.has(target, key)
+        },
+        ownKeys(target) {
+            track(target, ITERATE_KEY)
+            return Reflect.ownKeys(target)
+        },
+        set(target, key, newVal, receiver) {
+            // 合理触发响应 先获取旧值
+            const oldVal = target[key]
+            // 添加属性还是修改属性
+            const type = Object.prototype.hasOwnProperty.call(target, key) ? TriggerType.SET : TriggerType.ADD
+            const res = Reflect.set(target, key, newVal, receiver)
+
+            // target === receiver.raw 说明receiver就是target的代理对象，避免不必要更新
+            if (target === receiver.raw) {
+                // 比较旧值与新值 并且不为NaN
+                if (oldVal !== newVal && (oldVal === oldVal || newVal === newVal)) {
+                    trigger(target, key, type)
+                }
+            }
+            return res
+        },
+        deleteProperty(target, key) {
+            // 检查属性
+            const hadKey = Object.prototype.hasOwnProperty.call(target, key)
+            // 使用reflect删除属性
+            const res = Reflect.deleteProperty(target, key)
+
+            if (res && hadKey) {
+                // 只有当被删除的属性是对象自己的属性并且成功删除时，才触发更新
+                trigger(target, key, 'DELETE')
+            }
+            return res
+        }
+    })
+}
+function reactive(obj) {
+    return createReactive(obj)
+}
+
+function shallowReactive(obj) {
+    return createReactive(obj, true)
+}
+
+const data = reactive(obj)
 
 const effect = (fn, config = {}) => {
     const effectFn = () => {
@@ -209,7 +251,7 @@ function watch(source, cb, options = {}) {
         getter = () => traverse(source)
     }
     const job = () => {
-        if(cleanup) {
+        if (cleanup) {
             cleanup()
         }
         newValue = effectFn()
@@ -225,7 +267,7 @@ function watch(source, cb, options = {}) {
     const effectFn = effect(() => getter(), {
         lazy: true,
         scheduler: () => {
-            if(options.flush === 'post') {
+            if (options.flush === 'post') {
                 const p = Promise.resolve()
                 p.then(job)
             } else {
@@ -274,7 +316,7 @@ function watch(source, cb, options = {}) {
 //     onInvalidate(() => {
 //         expired = true
 //     })
-    
+
 //     const res = await fetch('https://api.coindesk.com/v1/bpi/currentprice.json')
 //     if(!expired) {
 //         finalData = res
@@ -290,10 +332,43 @@ function watch(source, cb, options = {}) {
 //     'foo' in data
 // })
 
-effect(() => {
-    for (const key in data) {
-        console.log(key);
-    }
-})
+// effect(() => {
+//     for (const key in data) {
+//         console.log(key);
+//     }
+// })
 
-data.foo = 2
+// start 值变化才更新 
+// effect(() => {
+//     console.log(data.count);
+// })
+
+// data.count = data.count
+// end
+
+// start 合理触发响应
+// const obj1 = {}
+// const proto = { bar: 1 }
+// const child = reactive(obj1)
+// const parent = reactive(proto)
+// Object.setPrototypeOf(child, parent)
+
+// effect(() => {
+//     console.log(child.bar)
+// })
+
+// child.bar = 2
+// end
+// start 深响应与浅响应
+const obj3 = reactive({ foo: { bar: 1 } })
+effect(() => {
+    console.log(obj3.foo.bar);
+})
+obj3.foo.bar = 2
+
+const obj4 = shallowReactive({ foo: { bar: 1 } })
+effect(() => {
+    console.log(obj4.count);
+})
+obj4.count = 4
+// end

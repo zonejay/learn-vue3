@@ -64,7 +64,7 @@ function track(target, key) {
     // console.log(activeEffect);
     activeEffect.deps.push(deps)
 }
-function trigger(target, key, type) {
+function trigger(target, key, type, newVal) {
     if (bucket.has(target)) {
         let depsMap = bucket.get(target)
         let effects = depsMap.get(key)
@@ -84,6 +84,28 @@ function trigger(target, key, type) {
                 }
             })
         }
+        // 数组触发与lenght相关的副作用函数
+        if (Array.isArray(target) && type === 'ADD') {
+            const lengthEffetcs = depsMap.get('length')
+            lengthEffetcs && lengthEffetcs.forEach(fn => {
+                if (fn !== activeEffect) {
+                    effectToRun.add(fn)
+                }
+            })
+        }
+
+        // 如果修改的是数组的length属性，需要触发索引值>=新length的副作用函数
+        if (Array.isArray(target) && key === 'length') {
+            depsMap.forEach((effects, key) => {
+                if (key >= newVal) {
+                    effects.forEach(fn => {
+                        if (fn !== activeEffect) {
+                            effectToRun.add(fn)
+                        }
+                    })
+                }
+            })
+        }
 
         effectToRun.forEach(fn => {
             if (fn.config.scheduler) {
@@ -94,20 +116,27 @@ function trigger(target, key, type) {
         })
     }
 }
-function createReactive(obj, isShallow = false) {
+function createReactive(obj, isShallow = false, isReadonly = false) {
     return new Proxy(obj, {
         get(target, key, receiver) {
             // console.log('track');
             if (key === 'raw') {
                 return target
             }
-            track(target, key)
+            // 只读状态下不必建立响应
+            if (!isReadonly) {
+                track(target, key)
+            }
+            const res = Reflect.get(target, key, receiver)
+            if (isShallow) {
+                return res
+            }
 
             // 得到原始数据
-            const res = Reflect.get(target, key, receiver)
-            if (!isShallow && typeof res === 'object' && res !== null) {
+            if (typeof res === 'object' && res !== null) {
                 // 将结果包装成响应式数据
-                return reactive(res)
+                // 如果是readonly 对象属性也应该是readonly
+                return isReadonly ? readonly(res) : reactive(res)
             }
             return res
         },
@@ -120,22 +149,35 @@ function createReactive(obj, isShallow = false) {
             return Reflect.ownKeys(target)
         },
         set(target, key, newVal, receiver) {
+            // 判断只读
+            if (isReadonly) {
+                console.log(`属性 ${key}是只读的`);
+                return true
+            }
             // 合理触发响应 先获取旧值
             const oldVal = target[key]
             // 添加属性还是修改属性
-            const type = Object.prototype.hasOwnProperty.call(target, key) ? TriggerType.SET : TriggerType.ADD
+            // 通过索引设置数组时，如果索引大于当前数组长度，也应该触发与length有关的副作用函数
+            const type = Array.isArray(target)
+                ? Number(key) < target.length ? 'SET' : 'ADD'
+                : Object.prototype.hasOwnProperty.call(target, key) ? TriggerType.SET : TriggerType.ADD
             const res = Reflect.set(target, key, newVal, receiver)
 
             // target === receiver.raw 说明receiver就是target的代理对象，避免不必要更新
             if (target === receiver.raw) {
                 // 比较旧值与新值 并且不为NaN
                 if (oldVal !== newVal && (oldVal === oldVal || newVal === newVal)) {
-                    trigger(target, key, type)
+                    trigger(target, key, type, newVal)
                 }
             }
             return res
         },
         deleteProperty(target, key) {
+            // 只读
+            if (isReadonly) {
+                console.log(`属性 ${key}是只读的`);
+                return true
+            }
             // 检查属性
             const hadKey = Object.prototype.hasOwnProperty.call(target, key)
             // 使用reflect删除属性
@@ -155,6 +197,14 @@ function reactive(obj) {
 
 function shallowReactive(obj) {
     return createReactive(obj, true)
+}
+
+function readonly(obj) {
+    return createReactive(obj, false, true)
+}
+
+function shallowReadonly(obj) {
+    return createReactive(obj, true, true)
 }
 
 const data = reactive(obj)
@@ -360,15 +410,38 @@ function watch(source, cb, options = {}) {
 // child.bar = 2
 // end
 // start 深响应与浅响应
-const obj3 = reactive({ foo: { bar: 1 } })
-effect(() => {
-    console.log(obj3.foo.bar);
-})
-obj3.foo.bar = 2
+// const obj3 = reactive({ foo: { bar: 1 } })
+// effect(() => {
+//     console.log(obj3.foo.bar);
+// })
+// obj3.foo.bar = 2
 
-const obj4 = shallowReactive({ foo: { bar: 1 } })
+// const obj4 = shallowReactive({ foo: { bar: 1 } })
+// effect(() => {
+//     console.log(obj4.count);
+// })
+// obj4.count = 4
+// end
+
+// start readonly
+// const obj5 = shallowReadonly({ foo: { count: 1 } })
+// effect(() => {
+//     obj5.foo
+// })
+// obj5.foo.count = 2
+// end
+
+// start array
+// 通过索引新增元素来触发与length相关的副作用函数
+const arr = reactive(['foo'])
 effect(() => {
-    console.log(obj4.count);
+    console.log(arr.length);
 })
-obj4.count = 4
+arr[1] = 'bar'
+// 修改数组长度触发副作用函数
+const arr2 = reactive(['foo'])
+effect(() => {
+    console.log(arr2[2]);
+})
+arr2.length = 0
 // end

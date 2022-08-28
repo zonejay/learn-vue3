@@ -47,7 +47,7 @@ function cleanup(effectFn) {
     effectFn.deps.length = 0
 }
 function track(target, key) {
-    if (!activeEffect) return
+    if (!activeEffect || !shouldTrack) return
     let depsMap
     if (bucket.has(target)) {
         depsMap = bucket.get(target)
@@ -116,15 +116,85 @@ function trigger(target, key, type, newVal) {
         })
     }
 }
+// indexOf 和lastIndexOf也需要类似的处理
+
+const arrayInstrumentations = {}
+    ;['includes', 'indexOf', 'lastIndexOf'].forEach(method => {
+        const originMethod = Array.prototype.includes
+        arrayInstrumentations[method] = function (...args) {
+            // this 是代理对象 现在代理对象中查找 将结果存储到res中
+            let res = originMethod.apply(this, args)
+
+            if (res === false || res === -1) {
+                // res 为false说明没找到 通过 this.raw拿到原始数据 再去其中查找并更新res值
+                res = originMethod.apply(tis.raw, args)
+            }
+
+            return res
+        }
+    })
+// 表示是否进行追踪 默认值true 允许追踪
+let shouldTrack = true
+    ;['push', 'pop', 'shift', 'unshift', 'splice'].forEach((method) => {
+        const originMethod = Array.prototype[method]
+        arrayInstrumentations[method] = function (...args) {
+            shouldTrack = false
+            let res = originMethod.apply(this, args)
+            shouldTrack = true
+            return res
+        }
+    })
+
+// 保存与Set相关的自定义方法
+const mutableInstrumentations = {
+    add(key) {
+        // this指向代理对象 可以通过raw来获取原始对象
+        const target = this.raw
+        // 先判断值是否已经存在
+        const hadKey = target.has(key)
+        // 执行原始数据对象的add方法来添加值
+        // 不需要bind 因为是世界通过原始数据来调用
+        const res = target.add(key)
+        if (!hadKey) {
+            // 调用trigger函数触发响应 并指定操作类型为add
+            trigger(target, key, 'ADD')
+        }
+        return res
+    },
+    delete(key) {
+        const target = this.raw
+        const hadKey = target.has(key)
+        const res = target.delete(key)
+        if (hadKey) {
+            trigger(target, key, 'DELETE')
+        }
+        return res
+    }
+}
 function createReactive(obj, isShallow = false, isReadonly = false) {
     return new Proxy(obj, {
         get(target, key, receiver) {
+            if (key === 'size') {
+                // 如果读取的是size属性
+                // 通过指定第三个参数 receiver为原始对象 target 从而修复问题
+                track(target, ITERATE_KEY)
+                return Reflect.get(target, key, target)
+            }
+            if (mutableInstrumentations.hasOwnProperty(key)) {
+                return mutableInstrumentations[key]
+            }
             // console.log('track');
             if (key === 'raw') {
                 return target
             }
+            // 如果操作的目标对象是数组 并且key存在于arrayInstrumentations上
+            // 那么返回定义在arrayInstrumentations上的值
+            if (Array.isArray(target) && arrayInstrumentations.hasOwnProperty(key)) {
+                return Reflect.get(arrayInstrumentations, key, receiver)
+            }
             // 只读状态下不必建立响应
-            if (!isReadonly) {
+            // 不跟踪symbol属性值 why
+            if (!isReadonly && typeof key !== 'symbol') {
                 track(target, key)
             }
             const res = Reflect.get(target, key, receiver)
@@ -145,7 +215,7 @@ function createReactive(obj, isShallow = false, isReadonly = false) {
             return Reflect.has(target, key)
         },
         ownKeys(target) {
-            track(target, ITERATE_KEY)
+            track(target, Array.isArray(target) ? 'length' : ITERATE_KEY)
             return Reflect.ownKeys(target)
         },
         set(target, key, newVal, receiver) {
@@ -191,8 +261,18 @@ function createReactive(obj, isShallow = false, isReadonly = false) {
         }
     })
 }
+// 定义一个map实例 存储原始对象到代理对象的映射
+const reactiveMap = new Map()
 function reactive(obj) {
-    return createReactive(obj)
+    // 优先通过原始对象obj寻找之前创建的代理对象 如果找到了 直接返回已有的代理对象
+    const existionProxy = reactiveMap.get(obj)
+    if (existionProxy) return existionProxy
+    // 否则 创建新的代理对象
+    const proxy = createReactive(obj)
+    // 保存在map中
+    reactiveMap.set(obj, proxy)
+
+    return proxy
 }
 
 function shallowReactive(obj) {
@@ -433,15 +513,57 @@ function watch(source, cb, options = {}) {
 
 // start array
 // 通过索引新增元素来触发与length相关的副作用函数
-const arr = reactive(['foo'])
+// const arr = reactive(['foo'])
+// effect(() => {
+//     console.log(arr.length);
+// })
+// arr[1] = 'bar'
+// // 修改数组长度触发副作用函数
+// const arr2 = reactive(['foo'])
+// effect(() => {
+//     console.log(arr2[2]);
+// })
+// arr2.length = 0
+// end
+
+// start 遍历数组
+// const arr = reactive(['foo'])
+// effect(() => {
+//     for (const key of arr) {
+//         console.log(key);
+//     }
+// })
+// arr[1] = 'sb'
+// end
+
+// start 数组的查找方法
+// const arr = reactive([1, 2])
+// effect(() => {
+//     console.log(arr.includes(1));
+// })
+// arr[0] = 3
+
+// const obj2 = {}
+// const arr = reactive([obj2])
+// console.log(arr.includes(arr[0]));
+// end
+
+// start 数组修改方法
+// const arr = reactive(['foo'])
+// effect(() => {
+//     arr.push('bar')
+// })
+
+// effect(() => {
+//     arr.push('der')
+// })
+// end
+
+// start map and set
+const p1 = reactive(new Set([1, 2, 3]))
 effect(() => {
-    console.log(arr.length);
+    console.log(p1.size);
 })
-arr[1] = 'bar'
-// 修改数组长度触发副作用函数
-const arr2 = reactive(['foo'])
-effect(() => {
-    console.log(arr2[2]);
-})
-arr2.length = 0
+
+p1.delete(1)
 // end

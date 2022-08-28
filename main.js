@@ -7,6 +7,8 @@ let activeEffect
 // 副作用函数栈，栈顶存放当前的副作用函数
 const effectStack = []
 const ITERATE_KEY = Symbol()
+const MAP_KEY_ITERATE_KEY = Symbol()
+const RAW_KEY = Symbol()
 const TriggerType = {
     SET: 'SET',
     ADD: 'ADD'
@@ -76,10 +78,23 @@ function trigger(target, key, type, newVal) {
                 effectToRun.add(fn)
             }
         })
-        if (type === TriggerType.ADD || type === 'DELETE') {
+        if (
+            type === TriggerType.ADD || 
+            type === 'DELETE' ||
+            // 如果操作类型是SET 并且目标对象的类型是Map
+            // 也应该出发触发与ITERATE_KEY相关联的副作用函数
+            (type === 'SET' && Object.prototype.toString.call(target) === '[object Map]')) {
             const iterateEffects = depsMap.get(ITERATE_KEY)
             iterateEffects && iterateEffects.forEach(fn => {
                 if (fn !== activeEffect) {
+                    effectToRun.add(fn)
+                }
+            })
+        }
+        if((type === 'ADD' || type === 'DELETE') && Object.prototype.toString.call(target) === '[object Map]') {
+            const mapKeyEffects = depsMap.get(MAP_KEY_ITERATE_KEY)
+            mapKeyEffects && mapKeyEffects.forEach(fn => {
+                if(fn !== activeEffect) {
                     effectToRun.add(fn)
                 }
             })
@@ -169,6 +184,108 @@ const mutableInstrumentations = {
             trigger(target, key, 'DELETE')
         }
         return res
+    },
+    get(key) {
+        // 获取原始对象
+        const target = this.raw
+        const had = target.has(key)
+        track(target, key)
+        // 如果存在 则返回结果 如果得到的结果res仍然是可代理的数据
+        // 则要返回使用reactive包装后的响应式数据
+        if(had) {
+            const res = target.get(key)
+            return typeof res === 'object' ? reactive(res):res
+        }
+    },
+    set(key, value) {
+        const target = this.raw
+        const had = target.has(key)
+        const oldVal = target.get(key)
+        // 获取原始数据 由于value本身可能已经是原始数据 所以此时value.raw不存在 则直接使用value
+        const rawValue = value.raw || value
+        target.set(key, rawValue)
+        if(!had) {
+            trigger(target, key, 'ADD')
+        } else if(oldVal !== value || (oldVal === oldVal && value === value)) {
+            // 如果不存在 并且值变了 则是SET类型操作
+            trigger(target, key, 'SET')
+        }
+    },
+    forEach(callback, thisArg) {
+        // wrap函数用来把可代理的值转换为响应式数据
+        const wrap = (val) => typeof val === 'object' ? reactive(val):val;
+        const target = this.raw
+        track(target, ITERATE_KEY)
+        target.forEach((v, k) => {
+            // 手动调用callback 用wrap函数包裹value和key后再传给callback 这样就实现了深响应
+            callback.call(thisArg, wrap(v), wrap(k), this)
+        })
+    },
+    entries:iterationMethod,
+    [Symbol.iterator]:iterationMethod,
+    values:valuesIterationMethod, 
+    keys: keysIterationMethod
+}
+function iterationMethod() {
+    const target = this.raw
+    const itr = target[Symbol.iterator]()
+
+    const wrap = (val) => typeof val === 'object' && val !== null ? reactive(val):val;
+
+    track(target, ITERATE_KEY)
+    return {
+        next() {
+            const {value, done} = itr.next()
+            return {
+                // 如果value不是undefined 则对其进行包装
+                value: value ? [wrap(value[0]), wrap(value[1])] : value,
+                done
+            }
+        },
+        [Symbol.iterator]() {
+            return this
+        }
+    }
+}
+function valuesIterationMethod() {
+    const target = this.raw
+    const itr = target.values()
+
+    const wrap = (val) => typeof val === 'object' ? reactive(val):val
+
+    track(target, ITERATE_KEY)
+
+    return {
+        next() {
+            const {value, done} = itr.next()
+            return {
+                value:wrap(value),
+                done
+            }
+        },
+        [Symbol.iterator]() {
+            return this
+        }
+    }
+}
+function keysIterationMethod() {
+    const target = this.raw
+    const itr = target.keys()
+    const wrap = (val) => typeof val === 'object' ? reactive(val) : val
+    
+    track(target, MAP_KEY_ITERATE_KEY)
+    
+    return {
+        next() {
+            const {value, done} = itr.next()
+            return {
+                value: wrap(value),
+                done
+            }
+        },
+        [Symbol.iterator]() {
+            return this
+        }
     }
 }
 function createReactive(obj, isShallow = false, isReadonly = false) {
@@ -560,10 +677,69 @@ function watch(source, cb, options = {}) {
 // end
 
 // start map and set
-const p1 = reactive(new Set([1, 2, 3]))
-effect(() => {
-    console.log(p1.size);
-})
+// const p1 = reactive(new Set([1, 2, 3]))
+// effect(() => {
+//     console.log(p1.size);
+// })
 
-p1.delete(1)
+// p1.delete(1)
+// end
+
+// start 避免原始数据污染
+// const p1 = reactive(new Map([['key', 1]]))
+// effect(() => {
+//     console.log(p1.get('key'));
+// })
+// p1.set('key', 2)
+// 原始Map
+// const m = new Map()
+// const p2 = reactive(m)
+// const p3 = reactive(new Map())
+// p2.set('p3', p3)
+
+// effect(() => {
+//     // 通过原始数据m访问p3
+//     console.log(m.get('p3').size);
+// })
+// // 通过原始数据m为p3设置一个键值对 不应该出发副作用函数
+// m.get('p3').set('foo', 1)
+// end
+
+// start Map forEach
+// section start
+// const m = reactive(new Map([[{key:1}, {value:1}]]))
+// effect(() => {
+//     m.forEach(function(value, key, m) {
+//         console.log(value);
+//         console.log(key);
+//     })
+// })
+// m.set({key:2}, {value:2})
+// section end
+// section start
+// const key = {key:1}
+// const value = new Set([1,2,3])
+// const p1 = reactive(new Map([['key', 1]]))
+// effect(() => {
+//     p1.forEach(function(value, key) {
+//         console.log(value);
+//         console.log(key);
+//     })
+// })
+
+// p1.set('key', 2)
+// section end
+// end
+
+// start 迭代器方法
+const p1 = reactive(new Map([
+    ['key1', 'value1'],
+    ['key2', 'value2']
+]))
+effect(() => {
+    for(const val of p1.keys()) {
+        console.log(val);
+    }
+})
+p1.set('key2', 'value3')
 // end

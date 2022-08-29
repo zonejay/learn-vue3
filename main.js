@@ -79,7 +79,7 @@ function trigger(target, key, type, newVal) {
             }
         })
         if (
-            type === TriggerType.ADD || 
+            type === TriggerType.ADD ||
             type === 'DELETE' ||
             // 如果操作类型是SET 并且目标对象的类型是Map
             // 也应该出发触发与ITERATE_KEY相关联的副作用函数
@@ -91,10 +91,10 @@ function trigger(target, key, type, newVal) {
                 }
             })
         }
-        if((type === 'ADD' || type === 'DELETE') && Object.prototype.toString.call(target) === '[object Map]') {
+        if ((type === 'ADD' || type === 'DELETE') && Object.prototype.toString.call(target) === '[object Map]') {
             const mapKeyEffects = depsMap.get(MAP_KEY_ITERATE_KEY)
             mapKeyEffects && mapKeyEffects.forEach(fn => {
-                if(fn !== activeEffect) {
+                if (fn !== activeEffect) {
                     effectToRun.add(fn)
                 }
             })
@@ -192,9 +192,9 @@ const mutableInstrumentations = {
         track(target, key)
         // 如果存在 则返回结果 如果得到的结果res仍然是可代理的数据
         // 则要返回使用reactive包装后的响应式数据
-        if(had) {
+        if (had) {
             const res = target.get(key)
-            return typeof res === 'object' ? reactive(res):res
+            return typeof res === 'object' ? reactive(res) : res
         }
     },
     set(key, value) {
@@ -204,16 +204,16 @@ const mutableInstrumentations = {
         // 获取原始数据 由于value本身可能已经是原始数据 所以此时value.raw不存在 则直接使用value
         const rawValue = value.raw || value
         target.set(key, rawValue)
-        if(!had) {
+        if (!had) {
             trigger(target, key, 'ADD')
-        } else if(oldVal !== value || (oldVal === oldVal && value === value)) {
+        } else if (oldVal !== value || (oldVal === oldVal && value === value)) {
             // 如果不存在 并且值变了 则是SET类型操作
             trigger(target, key, 'SET')
         }
     },
     forEach(callback, thisArg) {
         // wrap函数用来把可代理的值转换为响应式数据
-        const wrap = (val) => typeof val === 'object' ? reactive(val):val;
+        const wrap = (val) => typeof val === 'object' ? reactive(val) : val;
         const target = this.raw
         track(target, ITERATE_KEY)
         target.forEach((v, k) => {
@@ -221,21 +221,21 @@ const mutableInstrumentations = {
             callback.call(thisArg, wrap(v), wrap(k), this)
         })
     },
-    entries:iterationMethod,
-    [Symbol.iterator]:iterationMethod,
-    values:valuesIterationMethod, 
+    entries: iterationMethod,
+    [Symbol.iterator]: iterationMethod,
+    values: valuesIterationMethod,
     keys: keysIterationMethod
 }
 function iterationMethod() {
     const target = this.raw
     const itr = target[Symbol.iterator]()
 
-    const wrap = (val) => typeof val === 'object' && val !== null ? reactive(val):val;
+    const wrap = (val) => typeof val === 'object' && val !== null ? reactive(val) : val;
 
     track(target, ITERATE_KEY)
     return {
         next() {
-            const {value, done} = itr.next()
+            const { value, done } = itr.next()
             return {
                 // 如果value不是undefined 则对其进行包装
                 value: value ? [wrap(value[0]), wrap(value[1])] : value,
@@ -251,15 +251,15 @@ function valuesIterationMethod() {
     const target = this.raw
     const itr = target.values()
 
-    const wrap = (val) => typeof val === 'object' ? reactive(val):val
+    const wrap = (val) => typeof val === 'object' ? reactive(val) : val
 
     track(target, ITERATE_KEY)
 
     return {
         next() {
-            const {value, done} = itr.next()
+            const { value, done } = itr.next()
             return {
-                value:wrap(value),
+                value: wrap(value),
                 done
             }
         },
@@ -272,12 +272,12 @@ function keysIterationMethod() {
     const target = this.raw
     const itr = target.keys()
     const wrap = (val) => typeof val === 'object' ? reactive(val) : val
-    
+
     track(target, MAP_KEY_ITERATE_KEY)
-    
+
     return {
         next() {
-            const {value, done} = itr.next()
+            const { value, done } = itr.next()
             return {
                 value: wrap(value),
                 done
@@ -315,6 +315,9 @@ function createReactive(obj, isShallow = false, isReadonly = false) {
                 track(target, key)
             }
             const res = Reflect.get(target, key, receiver)
+            if (res.__v_isRef) {
+                return res.value
+            }
             if (isShallow) {
                 return res
             }
@@ -528,6 +531,58 @@ function watch(source, cb, options = {}) {
         oldValue = effectFn()
     }
 }
+function ref(value) {
+    const wrapper = {
+        value
+    }
+    // 使用Object.defineProperty在wrapper对象上定义一个不可枚举属性__v_isRef 并且值为true
+    Object.defineProperty(wrapper, '__v_isRef', {
+        value: true
+    })
+
+    return reactive(wrapper)
+}
+
+function toRef(obj, key) {
+    const wrapper = {
+        get value() {
+            return obj[key]
+        },
+        set value(val) {
+            obj[key] = val
+        }
+    }
+    Object.defineProperty(wrapper, '__v_isRef', {
+        value: true
+    })
+    return wrapper
+}
+
+function toRefs(obj) {
+    const ret = {}
+    for (const key in obj) {
+        ret[key] = toRef(obj, key)
+    }
+    return ret
+}
+
+function proxyRefs(target) {
+    return new Proxy(target, {
+        get(target, key, receiver) {
+            const value = Reflect.get(target, key, receiver)
+            return value.__v_isRef ? value.value : value
+        },
+        set(target, key, newVal, receiver) {
+            const value = target[key]
+            if (value.__v_isRef) {
+                value.value = newVal
+                return true
+            } else {
+                return Reflect.set(target, key, newVal, receiver)
+            }
+        }
+    })
+}
 
 // const fullname = computed(() => {
 //     console.log('computed effect');
@@ -732,14 +787,41 @@ function watch(source, cb, options = {}) {
 // end
 
 // start 迭代器方法
-const p1 = reactive(new Map([
-    ['key1', 'value1'],
-    ['key2', 'value2']
-]))
-effect(() => {
-    for(const val of p1.keys()) {
-        console.log(val);
-    }
+// const p1 = reactive(new Map([
+//     ['key1', 'value1'],
+//     ['key2', 'value2']
+// ]))
+// effect(() => {
+//     for(const val of p1.keys()) {
+//         console.log(val);
+//     }
+// })
+// p1.set('key2', 'value3')
+// end
+
+// start 非原始值响应
+// const refVal = ref(1)
+// effect(() => {
+//     console.log(refVal.value);
+// })
+// refVal.value = 2
+// end
+
+// start 响应值丢失
+const obj2 = reactive({ foo: 1, bar: 2 })
+
+// newObj对象具有与obj1对象同名的属性 并且每个属性值都是一个对象
+// 该对象具有一个访问器属性value 当读取value的值时 其实读取的是obj对象下相应的属性值
+const newObj = proxyRefs({
+    ...toRefs(obj2)
 })
-p1.set('key2', 'value3')
+
+effect(() => {
+    console.log(newObj.foo);
+})
+
+newObj.foo = 3
+const count = ref(0)
+const obj3 = reactive({ count })
+console.log(obj3.count);
 // end

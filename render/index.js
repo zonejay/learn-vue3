@@ -1,9 +1,15 @@
 const { effect, ref } = VueReactivity
+function shouldSetAsProps(el, key, value) {
+    // 特殊情况
+    if (key === 'form' && el.tagName === 'INPUT') return false
+    return key in el
+}
 function createRenderer(options) {
     const {
         createElement,
         insert,
-        setElementText
+        setElementText,
+        patchProps
     } = options
     function mountElement(vnode, container) {
         const el = createElement(vnode.type)
@@ -11,6 +17,18 @@ function createRenderer(options) {
         if (typeof vnode.children === 'string') {
             // 只需要设置元素的文本内容即可
             setElementText(el, vnode.children)
+        } else if (Array.isArray(vnode.children)) {
+            // 如果是数组 则遍历每一个节点 并调用patch函数挂载  
+            vnode.children.forEach(child => {
+                patch(null, child, el)
+            })
+        }
+        // 处理元素属性
+        if (vnode.props) {
+            for (const key in vnode.props) {
+                const value = vnode.props[key]
+                patchProps(el, key, null, value)
+            }
         }
         // 将元素添加到容器
         insert(el, container)
@@ -47,8 +65,24 @@ function createRenderer(options) {
 }
 
 const vnode = {
-    type: 'h1',
-    children: 'hello'
+    type: 'div',
+    props: {
+        id: 'foo'
+    },
+    children: [
+        {
+            type: 'p',
+            children: 'hello'
+        },
+        {
+            type: 'button',
+            props: {
+                // 使用setAttribute设置属性值总是会字符串化
+                disabled: false
+            },
+            children: 'click me'
+        }
+    ]
 }
 
 const renderer = createRenderer({
@@ -63,6 +97,20 @@ const renderer = createRenderer({
     // 在指定的parent下添加指定元素
     insert(el, parent, anchor = null) {
         parent.insertBefore(el, anchor)
+    },
+    patchProps(el, key, prevValue, nextValue) {
+        if (shouldSetAsProps(el, key, nextValue)) {
+            // 获取该DOM Properties的类型
+            const type = typeof el[key]
+            // 如果是bool 并且value为空字符串 矫正为true
+            if (type === 'boolean' && nextValue === '') {
+                el[key] = true
+            } else {
+                el[key] = nextValue
+            }
+        } else {
+            el.setAttribute(key, nextValue)
+        }
     }
 })
 

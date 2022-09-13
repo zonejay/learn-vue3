@@ -55,37 +55,80 @@ function createRenderer(options) {
             // 说明新子节点是一组子节点
             // 判断旧子节点是否也是一组子节点
             if (Array.isArray(n1.children)) {
-                // 新旧子节点都是一组子节点的情况下 会比较新旧子节点，涉及到核心的diff算法
-                // // 先用笨方法替代
-                // // 将旧的一组子节点全部卸载
-                // n1.children.forEach(c => unmount(c))
-                // // 再将新的一组子节点全部挂载到容器中
-                // n2.children.forEach(c => patch(null, c, container))
-                // 子节点更新 v2
-                // 新旧children
                 const oldChildren = n1.children
                 const newChildren = n2.children
-                // 旧的一组子节点的长度 
-                const oldLen = oldChildren.length
-                // 新的一组子节点的长度
-                const newLen = newChildren.length
-                // 两组子节点的公共长度 即两者中较短的那一组子节点长度
-                const commonLength = Math.min(oldLen, newLen)
-                // 遍历旧的commonLength
-                for (let i = 0; i < commonLength; i++) {
-                    // 调用patch函数逐个更新子节点
-                    patch(oldChildren[i], newChildren[i])
-                }
-                // 如果newLen > oldLen 说明有新子节点需要挂载
-                if (newLen > oldLen) {
-                    console.log('新节点更多');
-                    for (let i = commonLength; i < newLen; i++) {
-                        patch(null, newChildren[i], container)
+                // 用来存储寻找过程中遇到的最大索引值
+                let lastIndex = 0
+                // 遍历新的children
+                for (let i = 0; i < newChildren.length; i++) {
+                    const newNode = newChildren[i]
+                    let j = 0
+                    // 在第一层循环中定义变量find 表示是否在旧的一组节点中
+                    // 找到可复用的节点
+                    // 初始值为false 表示没有找到
+                    let find = false
+                    // 遍历旧的children
+                    for (j; j < oldChildren.length; j++) {
+                        const oldNode = oldChildren[j];
+                        // 如果找到了具有相同key值的两个节点 说明可以复用
+                        // 但仍然需要调用patch函数更新
+                        if (newNode.key === oldNode.key) {
+                            // 如果找到了key相同的节点 将find变为true
+                            find = true
+                            patch(oldNode, newNode, container)
+                            if (j < lastIndex) {
+                                // 如果当前找到的节点在旧children中的索引小于最大索引
+                                // 说明该节点对应的真实DOM需要移动
+                                // 先获取newNode的前一个node 即prevNode
+                                const prevNode = newChildren[i - 1]
+                                // 如果prevNode不存在 则说明当前newNode是第一个节点
+                                // 它不需要移动
+                                if (prevNode) {
+                                    // 由于我们要将newNode对应的真实节点移动到prevNode所对应
+                                    // 真实节点的后面 所以我们需要获取prevNode所对应真实节点
+                                    // 的下一个兄弟节点 并将其最为其锚点
+                                    const anchor = prevNode.el.nextSibling
+                                    // 调用insert方法将newNode对应的真实节点插入
+                                    // 到锚点元素前面 也就是prevNode对应真实节点的后面
+                                    insert(newNode.el, container, anchor)
+                                }
+                            } else {
+                                // 如果当前找到的节点在旧children中的索引不小于
+                                // 最大索引值 则更新lastIndex的值
+                                lastIndex = j
+                            }
+                            break
+                        }
                     }
-                } else if (oldLen > newLen) {
-                    // 如果oldLen > newLen 有旧子节点需要卸载
-                    for (let i = commonLength; i < oldLen; i++) {
-                        unmount(oldChildren[i])
+                    // 内层循环完之后如果find的值还是false
+                    // 则说明没有找到可复用的节点 需要挂载当前的newNode
+                    if (!find) {
+                        // 为了将节点挂载到正确位置 需要先获取锚点元素
+                        // 首先获取当前newNode的前一个vnode节点
+                        const prevNode = newChildren[i - 1]
+                        let anchor = null
+                        if (prevNode) {
+                            // 如果前一个节点不为空 则使用它的下一个兄弟节点作为锚点
+                            anchor = prevNode.el.nextSibling
+                        } else {
+                            // 如果没有前一个vnode 说明即将挂载的新节点是第一个子节点
+                            // 应该使用容器元素的firstChild作为锚点
+                            anchor = container.firstChild
+                        }
+                        // 挂载newNode
+                        patch(null, newNode, container, anchor)
+                    }
+                }
+
+                // 循环更新完之后再次遍历旧节点
+                for (let i = 0; i < oldChildren.length; i++) {
+                    const oldNode = oldChildren[i];
+                    // 拿旧子节点oldNode与新的一组子节点中寻找相同key值的节点
+                    const has = newChildren.find(vnode => vnode.key === oldNode.key)
+
+                    if (!has) {
+                        // 如果没有找到具有相同key值的节点 则说明需要删除该节点
+                        unmount(oldNode)
                     }
                 }
             } else {
@@ -106,7 +149,7 @@ function createRenderer(options) {
             // 如果也没有旧子节点 什么都不需要做
         }
     }
-    function mountElement(vnode, container) {
+    function mountElement(vnode, container, anchor) {
         // 让vnode.el引用真实DOM元素
         const el = vnode.el = createElement(vnode.type)
         // 处理子节点 如果子节点是字符串 代表元素具有文本节点
@@ -127,11 +170,11 @@ function createRenderer(options) {
             }
         }
         // 将元素添加到容器
-        insert(el, container)
+        insert(el, container, anchor)
     }
     // n1 旧vnode
     // n2 新vnode
-    function patch(n1, n2, container) {
+    function patch(n1, n2, container, anchor) {
         // 不同类型的vnode之间打补丁没有意义
         if (n1 && n1.type !== n2.type) {
             // 直接卸载旧元素
@@ -142,7 +185,7 @@ function createRenderer(options) {
         if (typeof type === 'string') {
             // 如果n1不存在 意味着挂载 则调用mountElement函数完成挂载
             if (!n1) {
-                mountElement(n2, container)
+                mountElement(n2, container, anchor)
             } else {
                 // n1存在 则打补丁
                 patchElement(n1, n2)
@@ -314,7 +357,7 @@ const vnode = ref({
     children: [
         { type: 'p', children: '1', key: 1 },
         { type: 'p', children: '2', key: 2 },
-        { type: 'p', children: '3', key: 3 }
+        { type: 'p', children: 'hello', key: 3 }
     ]
 })
 
@@ -324,12 +367,13 @@ effect(() => {
 
 // 模拟节点就更新
 setTimeout(() => {
+    console.log('update');
     vnode.value = {
         type: 'div',
         children: [
-            { type: 'p', children: '3', key: 3 },
-            { type: 'p', children: '1', key: 1 },
+            { type: 'p', children: 'world', key: 3 },
+            { type: 'p', children: '4', key: 4 },
             { type: 'p', children: '2', key: 2 },
         ]
     }
-}, 3000);
+}, 1000);

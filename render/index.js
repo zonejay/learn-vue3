@@ -1,4 +1,4 @@
-const { effect, ref } = VueReactivity
+const { effect, ref, reactive } = VueReactivity
 // 片段标识 多跟节点
 const Fragment = Symbol()
 // 文本节点标识
@@ -24,7 +24,6 @@ function createRenderer(options) {
     } = options
     function patchElement(n1, n2) {
         const el = n2.el = n1.el
-        console.log(n1, n2);
         const oldProps = n1.props
         const newProps = n2.props
         // 先更新props
@@ -57,11 +56,38 @@ function createRenderer(options) {
             // 判断旧子节点是否也是一组子节点
             if (Array.isArray(n1.children)) {
                 // 新旧子节点都是一组子节点的情况下 会比较新旧子节点，涉及到核心的diff算法
-                // 先用笨方法替代
-                // 将旧的一组子节点全部卸载
-                n1.children.forEach(c => unmount(c))
-                // 再将新的一组子节点全部挂载到容器中
-                n2.children.forEach(c => patch(null, c, container))
+                // // 先用笨方法替代
+                // // 将旧的一组子节点全部卸载
+                // n1.children.forEach(c => unmount(c))
+                // // 再将新的一组子节点全部挂载到容器中
+                // n2.children.forEach(c => patch(null, c, container))
+                // 子节点更新 v2
+                // 新旧children
+                const oldChildren = n1.children
+                const newChildren = n2.children
+                // 旧的一组子节点的长度 
+                const oldLen = oldChildren.length
+                // 新的一组子节点的长度
+                const newLen = newChildren.length
+                // 两组子节点的公共长度 即两者中较短的那一组子节点长度
+                const commonLength = Math.min(oldLen, newLen)
+                // 遍历旧的commonLength
+                for (let i = 0; i < commonLength; i++) {
+                    // 调用patch函数逐个更新子节点
+                    patch(oldChildren[i], newChildren[i])
+                }
+                // 如果newLen > oldLen 说明有新子节点需要挂载
+                if (newLen > oldLen) {
+                    console.log('新节点更多');
+                    for (let i = commonLength; i < newLen; i++) {
+                        patch(null, newChildren[i], container)
+                    }
+                } else if (oldLen > newLen) {
+                    // 如果oldLen > newLen 有旧子节点需要卸载
+                    for (let i = commonLength; i < oldLen; i++) {
+                        unmount(oldChildren[i])
+                    }
+                }
             } else {
                 // 旧子节点要么是文本子节点 要么不存在
                 // 无论哪种情况 我们只需要将容器清空 然后将新的一组子节点逐个挂载
@@ -114,7 +140,6 @@ function createRenderer(options) {
         const { type } = n2
         // 如果为字符串，则描述的是普通标签
         if (typeof type === 'string') {
-            console.log('string type');
             // 如果n1不存在 意味着挂载 则调用mountElement函数完成挂载
             if (!n1) {
                 mountElement(n2, container)
@@ -252,6 +277,7 @@ const renderer = createRenderer({
         }
     },
     unmount(vnode) {
+        console.log(vnode);
         const parent = vnode.el.parentNode
         // 在卸载时 如果卸载的vnode类型为Fragment 则需要卸载其children
         if (vnode.type === Fragment) {
@@ -283,45 +309,27 @@ const renderer = createRenderer({
 // }, 1000);
 
 const bol = ref(false)
+const vnode = ref({
+    type: 'div',
+    children: [
+        { type: 'p', children: '1', key: 1 },
+        { type: 'p', children: '2', key: 2 },
+        { type: 'p', children: '3', key: 3 }
+    ]
+})
 
 effect(() => {
-    const vnode = {
+    renderer.render(vnode.value, document.querySelector("#app"))
+})
+
+// 模拟节点就更新
+setTimeout(() => {
+    vnode.value = {
         type: 'div',
-        props: bol.value ? {
-            onClick: () => {
-                alert('父元素clicked')
-            }
-        } : {},
         children: [
-            {
-                type: 'p',
-                props: {
-                    onClick: () => {
-                        bol.value = true
-                        console.log('lolo');
-                    }
-                },
-                children: 'text'
-            },
-            {
-                type: Text,
-                children: 'sb'
-            },
-            {
-                type: 'ul',
-                children: [
-                    {
-                        type: Fragment,
-                        children: [
-                            { type: 'li', children: 'text 1' },
-                            { type: 'li', children: 'text 2' },
-                            { type: 'li', children: 'text 3' },
-                        ]
-                    }
-                ]
-            }
+            { type: 'p', children: '3', key: 3 },
+            { type: 'p', children: '1', key: 1 },
+            { type: 'p', children: '2', key: 2 },
         ]
     }
-
-    renderer.render(vnode, document.querySelector("#app"))
-})
+}, 3000);
